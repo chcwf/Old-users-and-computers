@@ -1,0 +1,65 @@
+#oldADU - written by landob with the help of some random folks on /r/powershell 04-24-2019
+
+#This script looks in AD for Users and Computers not logged in/logged into for +30days. It compiles them into .csv files and emails them.
+import-module activedirectory  
+
+$domain = "yourdomain.local"  
+
+$DaysInactive = 30  
+
+$time = (Get-Date).Adddays(-($DaysInactive)) 
+
+$inactivecomp = 'C:\scripts\ad-reports\inactivecomputers.csv'
+
+$inactiveuser = 'C:\scripts\ad-reports\inactiveusers.csv' 
+
+
+
+Remove-Item -Path $inactivecomp -Force
+
+Remove-Item -Path $inactiveuser -Force
+
+  
+
+If ((Test-Path C:\scripts\AD-Reports) -eq $false){
+
+New-Item -ItemType Directory -Path C:\scripts -Name ad-reports
+
+}
+# Get inactive computers report
+Get-ADComputer -SearchBase "OU=Workstations,OU=Computers,OU=CHC Servers and Computers,dc=yourdomain,dc=local" -Filter {LastLogonTimeStamp -lt $time} -Properties LastLogonTimeStamp |
+select-object Name,@{Name="LastSeen"; Expression={[DateTime]::FromFileTime($_.lastLogonTimestamp)}} | 
+
+sort -Property LastSeen |
+
+export-csv $inactivecomp -notypeinformation -Force
+
+#Get inactive AD user report
+    #Variables to Ignore these OUs
+
+$OUMW = "OU=Megawest Logins,OU=CHC Users and Groups,dc=yourdomain,dc=local"
+$OUSA = "OU=Service Accounts,OU=CHC Users and Groups,dc=yourdomain,dc=local"
+
+Get-ADUser -SearchBase "OU=CHC Users and Groups,dc=yourdomain,dc=local" -Filter {LastLogonDate -lt $time} -Properties LastLogonDate | Where-Object { $_.DistinguishedName -notlike "*,$OUMW" -and ($_.DistinguishedName -notlike "*,$OUSA") } |
+
+Select Name, Enabled, LastLogonDate |
+
+Sort LastLogonDate |
+
+Export-Csv -Path $inactiveuser -NoTypeInformation -Force 
+
+# Send Email with the Files as attachments
+$User = "yourdomain\powershell"
+$PWord = ConvertTo-SecureString -String "passwordhere" -AsPlainText -Force
+$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $User, $PWord
+
+$email = @{
+from = "powershell@yourdomain.com"
+to = "help.desk@yourdomain.com"
+subject = "Users and Computers not seen in 30 days"
+smtpserver = "172.31.0.10"
+credential = $Credential
+attachments = (get-childitem "C:\scripts\ad-reports").fullname
+body = "These are users and computers not seen/logged into in 30 days on the yourdomain.local network. Please analyze them and disable/delete them in AD and ESET if necessary."
+}
+Send-MailMessage @email
